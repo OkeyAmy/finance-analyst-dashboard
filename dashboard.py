@@ -299,85 +299,8 @@ class CreditScoringDashboard:
 
     def display_detailed_analysis(self, analysis_text: str):
         st.markdown("### 📝 Detailed Analysis")
+        st.markdown(analysis_text)
         
-        tabs = st.tabs([
-            "Key Findings",
-            "Recommendations",
-            "Red Flags",
-            "Action Plan"
-        ])
-        
-        # Helper function to extract section content
-        def extract_section(start_marker: str, end_marker: str) -> str:
-            start_idx = analysis_text.lower().find(start_marker.lower())
-            end_idx = analysis_text.lower().find(end_marker.lower())
-            
-            if start_idx == -1:
-                # Try alternate markers without asterisks
-                clean_marker = start_marker.replace('*', '')
-                start_idx = analysis_text.lower().find(clean_marker.lower())
-                
-            if end_idx == -1:
-                # Try alternate markers without asterisks
-                clean_marker = end_marker.replace('*', '')
-                end_idx = analysis_text.lower().find(clean_marker.lower())
-                
-            if start_idx == -1:
-                return "Section not found"
-                
-            if end_idx == -1:
-                # If end marker not found, take until the end
-                return analysis_text[start_idx:].strip()
-                
-            return analysis_text[start_idx:end_idx].strip()
-        
-        # Remove markdown formatting from the analysis text
-        clean_text = self.markdown_converter.remove_markdown(analysis_text)
-        
-        with tabs[0]:
-            st.markdown("#### Strengths and Weaknesses")
-            
-            # Extract strengths and weaknesses sections
-            strengths = extract_section(
-                "Strengths:", 
-                "Weaknesses:"
-            ).replace("Strengths:", "").strip()
-            weaknesses = extract_section(
-                "Weaknesses:", 
-                "2. Specific Recommendations"
-            ).replace("Weaknesses:", "").strip()
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("##### Weaknesses")
-                st.markdown("**")
-                st.markdown(weaknesses)
-            
-            with col2:
-                st.markdown("##### Strengths")
-                st.markdown("**")
-                st.markdown(strengths)
-        
-        with tabs[1]:
-            recommendations = extract_section(
-                "2. Specific Recommendations", 
-                "3. Potential Red Flags"
-            )
-            st.markdown(recommendations)
-        
-        with tabs[2]:
-            red_flags = extract_section(
-                "3. Potential Red Flags", 
-                "4. Short-Term"
-            )
-            st.markdown(red_flags)
-        
-        with tabs[3]:
-            action_plan = extract_section(
-                "4. Short-Term", 
-                "Disclaimer:"
-            )
-            st.markdown(action_plan)
 
     def display_ai_chat(self):
         # Watson Assistant script
@@ -459,3 +382,8 @@ class CreditScoringDashboard:
 if __name__ == "__main__":
     dashboard = CreditScoringDashboard()
     dashboard.run() 
+
+
+
+
+
