@@ -7,3 +7,5 @@ seaborn
 matplotlib
 streamlit 
 plotly
+PyPDF2
+tornado

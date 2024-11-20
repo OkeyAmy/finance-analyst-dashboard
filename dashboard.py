@@ -1,107 +1,345 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-from pathlib import Path
-from plotly.subplots import make_subplots
-from credit_score import AICreditScorer
-from markdown_converter import MarkdownConverter
 import re
-from typing import Dict, Optional
-import streamlit.components.v1 as components
+import os
+from pathlib import Path
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime
+from ai.credit_scorer import AICreditScorer
+from markdown.markdown_converter import MarkdownConverter
+from plotly.subplots import make_subplots
 
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-class CreditScoringDashboard:
+class CreditScoringUI:
     def __init__(self):
-        self.setup_page_config()
-        self.setup_styles()
-        self.scorer = AICreditScorer(output_dir="credit_analysis_outputs")
-        self.markdown_converter = MarkdownConverter()
+        # Set page configuration
+        st.set_page_config(page_title="AI Credit Scoring", page_icon="💳", layout="wide")
         
-    def setup_page_config(self):
-        st.set_page_config(
-            page_title="Credit Score Analysis",
-            page_icon="💳",
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
+        # Initialize session state
+        if 'page' not in st.session_state:
+            st.session_state.page = 'upload'
         
-    def setup_styles(self):
+        # Store all previous analysis results
+        if 'previous_analyses' not in st.session_state:
+            st.session_state.previous_analyses = []
+        
+        # Current analysis result
+        if 'current_analysis' not in st.session_state:
+            st.session_state.current_analysis = None
+
+    def save_file(self, uploaded_file, directory):
+        """Save uploaded file and return the path"""
+        save_dir = Path(directory)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = save_dir / f"{timestamp}_{uploaded_file.name}"
+        
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+            
+        return str(file_path)
+
+    def create_sidebar(self):
+        """Create a universal sidebar for downloads"""
+        with st.sidebar:
+            st.header("📥 Previous Analyses")
+            
+            if st.session_state.previous_analyses:
+                for idx, analysis in enumerate(st.session_state.previous_analyses, 1):
+                    with st.expander(f"Analysis {idx}: {analysis['business_name']}"):
+                        # Business Purpose Report
+                        business_purpose_text = MarkdownConverter.remove_markdown(
+                            analysis['processed_purpose']
+                        )
+                        analysis_text = MarkdownConverter.remove_markdown(analysis['analysis'])
+
+                        st.download_button(
+                            label="Business Purpose Report",
+                            data=business_purpose_text,
+                            file_name=f"business_purpose_report_{analysis['business_name']}.txt",
+                            mime="text/plain",
+                            key=f"download_purpose_{idx}"
+                        )
+                        
+                        # Detailed Analysis Report
+                        st.download_button(
+                            label="Detailed Analysis Report",
+                            data=analysis_text,
+                            file_name=f"financial_analysis_{analysis['business_name']}.txt",
+                            mime="text/plain",
+                            key=f"download_analysis_{idx}"
+                        )
+
+                        # Additional reports from saved_paths
+                        if 'saved_paths' in analysis:
+                            for output_type, path in analysis['saved_paths'].items():
+                                # Skip business purpose and analysis reports as they're handled above
+                                if output_type not in ['business_purpose', 'analysis']:
+                                    if os.path.exists(path):
+                                        with open(path, 'rb') as f:
+                                            st.download_button(
+                                                label=f"Download {output_type.title()} Report",
+                                                data=f,
+                                                file_name=os.path.basename(path),
+                                                mime='application/octet-stream',
+                                                key=f"download_{output_type}_{idx}"
+                                            )
+            else:
+                st.info("No previous analyses available.")
+
+    def upload_page(self):
+        # Create sidebar for downloads
+        self.create_sidebar()
+        
+        st.title("🏦 AI Credit Scoring System for Small Businesses")
         st.markdown("""
-            <style>
-                .stat-card {
-                    padding: 20px;
-                    border-radius: 10px;
-                    background: white;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    margin: 10px 0;
+            This system analyzes your business's financial data and provides a comprehensive credit assessment
+            using advanced AI algorithms.
+        """)
+
+        with st.form("upload_form", clear_on_submit=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Business Information")
+                business_name = st.text_input("Business Name")
+                financial_doc = st.file_uploader(
+                    "Upload Financial Document", 
+                    type=['pdf', 'csv']
+                )
+
+            with col2:
+                st.subheader("Business Model Recording")
+                st.markdown("Please Provide Your Business Model Description and Financial Data for Analysis (Please be detailed in your business model).")
+                audio_file = st.audio_input("Record a voice message")
+
+            submit_button = st.form_submit_button("Analyze Business")
+
+            if submit_button and business_name and financial_doc and audio_file:
+                scorer = AICreditScorer()
+                
+                # Save files
+                financial_path = self.save_file(financial_doc, "temp/financial_docs")
+                audio_path = self.save_file(audio_file, "temp/audio_files")
+
+                with st.spinner("Analyzing business data...\nWait while we analyze your data."):
+                    try:
+                        # Perform analysis
+                        results = scorer.analyze_financial_data(
+                            file_path=financial_path,
+                            business_name=business_name,
+                            audio_purpose_path=audio_path
+                        )
+
+                        # Store current analysis
+                        st.session_state.current_analysis = results
+                        
+                        # Add to previous analyses
+                        st.session_state.previous_analyses.append(results)
+
+                        # Navigate to results page
+                        st.session_state.page = 'results'
+                        st.rerun()
+                    
+                    except Exception as e:
+                        st.error(f"Analysis failed: {str(e)}")
+                
+                # Clean up temporary files
+                os.remove(financial_path)
+                os.remove(audio_path)
+
+    def results_page(self):
+        # Create sidebar for downloads
+        self.create_sidebar()
+        
+        # Verify analysis results exist
+        if not st.session_state.current_analysis:
+            st.error("No analysis results available.")
+            if st.button("Back to Upload"):
+                st.session_state.page = 'upload'
+            return
+
+        results = st.session_state.current_analysis
+
+        # Main results display
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.title("🏦 Credit Analysis Results")
+
+        with col2:
+            if st.button("Back to Upload"):
+                st.session_state.page = 'upload'
+
+        # Credit Score Section
+        self.render_credit_score_section(
+            results['credit_score'], 
+            results['rating']
+        )
+
+        # Risk Analysis
+        with st.header("⚠️ Risk Analysis"):
+            self.render_risk_analysis_details(results['risk_factors'])
+
+        # Financial Trends
+        self.render_financial_trends(results['dataframe'])
+
+        # Detailed Analysis
+        self.render_detailed_analysis(results['analysis'])
+
+    def render_credit_score_section(self, score, rating):
+        """Render credit score details with explanations"""
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Gauge chart for credit score
+            fig = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = score,
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                title = {'text': f"Credit Score: {rating}"},
+                gauge = {
+                    'axis': {'range': [300, 850]},
+                    'bar': {'color': "darkblue"},
+                    'steps': [
+                        {'range': [300, 600], 'color': "red"},
+                        {'range': [600, 700], 'color': "yellow"},
+                        {'range': [700, 800], 'color': "lightgreen"},
+                        {'range': [800, 850], 'color': "green"}
+                    ]
                 }
-                .metric-big {
-                    font-size: 3rem;
-                    font-weight: bold;
-                    text-align: center;
-                }
-                .metric-label {
-                    font-size: 1.2rem;
-                    color: #666;
-                    text-align: center;
-                }
-                .summary-metric {
-                    font-size: 1.5rem;
-                    font-weight: bold;
-                    color: #1E3D59;
-                }
-                .risk-label {
-                    font-weight: bold;
-                    margin-right: 10px;
-                }
-                .section-header {
-                    font-size: 1.5rem;
-                    color: #1E3D59;
-                    margin: 20px 0;
-                    font-weight: bold;
-                }
-                .recommendation-card {
-                    background: #f8f9fa;
-                    padding: 15px;
-                    border-radius: 5px;
-                    margin: 10px 0;
-                }
-                .risk-high { color: #dc3545; }
-                .risk-medium { color: #ffc107; }
-                .risk-low { color: #28a745; }
-                .chat-container {
-                    position: fixed;
-                    bottom: 20px;
-                    left: 20px;
-                    width: 300px;
-                    background: white;
-                    border-radius: 10px;
-                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                    padding: 15px;
-                    z-index: 1000;
-                }
-            </style>
-        """, unsafe_allow_html=True)
+            ))
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with col2:
+            st.subheader("Score Interpretation")
+            
+            # Detailed score breakdown with explanations
+            score_categories = {
+                'Poor (300-599)': "High risk. Indicates significant financial challenges. Urgent improvement needed.",
+                'Fair (600-699)': "Moderate risk. Some financial improvement opportunities exist.",
+                'Good (700-799)': "Low risk. Strong financial health with room for optimization.",
+                'Excellent (800-850)': "Very low risk. Outstanding financial management and stability."
+            }
+            
+            # Determine the score category
+            score_category = next(
+                (cat for cat, desc in score_categories.items() if self.check_score_range(cat, score)), 
+                "Unknown"
+            )
+            
+            st.markdown(f"""
+                - **Current Score:** {score}
+                - **Rating:** {rating}
+                - **Category:** {score_category}
+                
+                **What This Means:**
+                {score_categories.get(score_category, "Financial assessment in progress.")}
+            """)
+
+    def check_score_range(self, category, score):
+        """Helper method to check score ranges"""
+        ranges = {
+            'Poor (300-599)': (300, 599),
+            'Fair (600-699)': (600, 699),
+            'Good (700-799)': (700, 799),
+            'Excellent (800-850)': (800, 850)
+        }
+        min_score, max_score = ranges.get(category, (0, 0))
+        return min_score <= score <= max_score
+
+    def render_risk_analysis_details(self, risk_factors):
+        """Render the risk analysis section"""
+        # Color mapping for risk levels
+        colors = {
+            'low': 'green',
+            'medium': 'orange',
+            'high': 'red'
+        }
+        
+        # Risk explanations dictionary matching credit_scorer.py factors
+        risk_explanations = {
+            'cash_flow_stability': "Assesses the ability to maintain positive cash flow and meet financial obligations",
+            'payment_history': "Evaluates the consistency and reliability of payment transactions",
+            'debt_management': "Analyzes the ability to manage and repay existing debts effectively",
+            'business_growth': "Measures the overall business growth trajectory and revenue trends",
+            'operating_history': "Evaluates the length and consistency of business operations"
+        }
+        
+        # Columns for risk factors
+        cols = st.columns(len(risk_factors))
+        
+        for col, (factor, level) in zip(cols, risk_factors.items()):
+            with col:
+                # Metric card with improved styling
+                st.markdown(f"""
+                    <div style="
+                        background-color: #f0f2f6;
+                        border-radius: 10px;
+                        padding: 15px;
+                        margin: 5px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1)
+                    ">
+                        <h3 style="color: #1f1f1f; margin-bottom: 10px;">
+                            {factor.replace('_', ' ').title()}
+                        </h3>
+                        <p style="
+                            color: {colors[level]}; 
+                            font-weight: bold; 
+                            font-size: 1.2em;
+                            margin-bottom: 10px;
+                        ">
+                            {level.upper()}
+                        </p>
+                        <p style="
+                            font-size: 0.9em;
+                            color: #424242;
+                            line-height: 1.4;
+                        ">
+                            {risk_explanations.get(factor, "Assessment based on multiple financial indicators.")}
+                        </p>
+                    </div>
+                """, unsafe_allow_html=True)
 
     def create_transaction_plot(self, df: pd.DataFrame) -> go.Figure:
+        """Create a subplot figure with credit/debit trends and balance history"""
+        # Sort data by date
+        df = df.sort_values(by='Date')
+
+        # Handle missing values by forward filling
+        df[['Credit', 'Debit', 'Balance']] = df[['Credit', 'Debit', 'Balance']].fillna(method='ffill')
+
         fig = make_subplots(rows=2, cols=1, 
                            subplot_titles=('Credit/Debit Trends', 'Balance History'),
                            vertical_spacing=0.15)
 
         fig.add_trace(
-            go.Scatter(x=df['Date'], y=df['Credit'],
-                      name='Credit', line=dict(color='#28a745')),
+            go.Scatter(
+                x=df['Date'], y=df['Credit'],
+                name='Credit', line=dict(color='#28a745'),
+                connectgaps=True
+            ),
             row=1, col=1
         )
         fig.add_trace(
-            go.Scatter(x=df['Date'], y=df['Debit'],
-                      name='Debit', line=dict(color='#dc3545')),
+            go.Scatter(
+                x=df['Date'], y=df['Debit'],
+                name='Debit', line=dict(color='#dc3545'),
+                connectgaps=True
+            ),
             row=1, col=1
         )
         
         fig.add_trace(
-            go.Scatter(x=df['Date'], y=df['Balance'],
-                      name='Balance', line=dict(color='#17a2b8')),
+            go.Scatter(
+                x=df['Date'], y=df['Balance'],
+                name='Balance', line=dict(color='#17a2b8'),
+                connectgaps=True
+            ),
             row=2, col=1
         )
 
@@ -123,267 +361,30 @@ class CreditScoringDashboard:
 
         return fig
 
-    def extract_sections(self, text: str) -> dict:
-        """Extract sections and their content from the analysis text."""
-        # First, find all headings and their positions
-        heading_pattern = r'^#+\s+(.+)$|^\*\*([^*]+)\*\*:?$'
-        sections = {}
-        current_heading = None
-        current_content = []
+    def render_financial_trends(self, df):
+        """Render financial trends visualization"""
+        st.header("📈 Financial Trends")
         
-        for line in text.split('\n'):
-            heading_match = re.match(heading_pattern, line.strip())
-            if heading_match:
-                # Save previous section if it exists
-                if current_heading and current_content:
-                    sections[current_heading] = '\n'.join(current_content).strip()
-                
-                # Get new heading (either from # or **)
-                current_heading = heading_match.group(1) or heading_match.group(2)
-                current_content = []
-            else:
-                if current_heading:
-                    current_content.append(line)
-        
-        # Don't forget to add the last section
-        if current_heading and current_content:
-            sections[current_heading] = '\n'.join(current_content).strip()
-        
-        return sections
-
-    def display_score_header(self, score: int, rating: str):
-        st.markdown("# Credit Score Analysis Dashboard")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(
-                f"""
-                <div class="stat-card">
-                    <div class="metric-label">Credit Score</div>
-                    <div class="metric-big">{score}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        with col2:
-            rating_colors = {
-                'Excellent': '#28a745',
-                'Good': '#17a2b8',
-                'Fair': '#ffc107',
-                'Poor': '#dc3545'
-            }
-            st.markdown(
-                f"""
-                <div class="stat-card">
-                    <div class="metric-label">Rating</div>
-                    <div class="metric-big" style="color: {rating_colors.get(rating, '#666')}">{rating}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    def display_transaction_analysis(self, df: pd.DataFrame):
-        st.markdown("### 📈 Transaction Analysis")
-        
+        # Create and display the combined plot
         fig = self.create_transaction_plot(df)
         st.plotly_chart(fig, use_container_width=True)
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown(
-                f"""
-                <div class="stat-card">
-                    <div class="metric-label">Average Credit</div>
-                    <div class="summary-metric">{df['Credit'].mean():.2f}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            
-        with col2:
-            st.markdown(
-                f"""
-                <div class="stat-card">
-                    <div class="metric-label">Average Debit</div>
-                    <div class="summary-metric">{df['Debit'].mean():.2f}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            
-        with col3:
-            st.markdown(
-                f"""
-                <div class="stat-card">
-                    <div class="metric-label">Average Balance</div>
-                    <div class="summary-metric">{df['Balance'].mean():.2f}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
 
-    def display_financial_summary(self, analysis_text: str):
-        st.markdown("### 📊 Financial Summary")
-        sections = self.extract_sections(analysis_text)
-        financial_summary = sections.get("Financial Summary", "")
-        
-        summary_lines = [line for line in financial_summary.split('\n') 
-                        if any(metric in line for metric in 
-                              ['Total Credits:', 'Total Debits:', 'Average Balance:', 'Transaction Count:'])]
-        
-        col1, col2 = st.columns(2)
-        
-        for i, line in enumerate(summary_lines):
-            if ':' in line:
-                metric, value = line.split(':')
-                value = value.strip()
-                with col1 if i < 2 else col2:
-                    st.markdown(
-                        f"""
-                        <div class="stat-card">
-                            <div class="metric-label">{metric}</div>
-                            <div class="summary-metric">{value}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-    def display_risk_analysis(self, risk_factors: Dict):
-        st.markdown("### 🎯 Risk Factor Analysis")
-        
-        categories = list(risk_factors.keys())
-        risk_values = {'low': 1, 'medium': 2, 'high': 3}
-        values = [risk_values[v] for v in risk_factors.values()]
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatterpolar(
-            r=values,
-            theta=[c.replace('_', ' ').title() for c in categories],
-            fill='toself',
-            line_color='#1E3D59'
-        ))
-        
-        fig.update_layout(
-            polar=dict(
-                radialaxis=dict(
-                    visible=True,
-                    range=[0, 3],
-                    ticktext=['', 'Low', 'Medium', 'High'],
-                    tickvals=[0, 1, 2, 3],
-                )
-            ),
-            showlegend=False
-        )
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            for factor, level in risk_factors.items():
-                risk_color = {
-                    'high': 'risk-high',
-                    'medium': 'risk-medium',
-                    'low': 'risk-low'
-                }[level]
-                st.markdown(
-                    f"""
-                    <div class="stat-card">
-                        <span class="risk-label">{factor.replace('_', ' ').title()}:</span>
-                        <span class="{risk_color}">{level.upper()}</span>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-    def display_detailed_analysis(self, analysis_text: str):
-        st.markdown("### 📝 Detailed Analysis")
-        st.markdown(analysis_text)
-        
-
-    def display_ai_chat(self):
-        # Watson Assistant script
-        watson_script = """
-        <script>
-          window.watsonAssistantChatOptions = {
-            integrationID: "2605fdba-a0b1-4918-9de6-9cb51ad371c6", // The ID of this integration.
-            region: "jp-tok", // The region your integration is hosted in.
-            serviceInstanceID: "a1ff6cfd-4109-4994-a7c5-4b075ba70342", // The ID of your service instance.
-            onLoad: async (instance) => { await instance.render(); }
-          };
-          setTimeout(function(){
-            const t=document.createElement('script');
-            t.src="https://web-chat.global.assistant.watson.appdomain.cloud/versions/" + (window.watsonAssistantChatOptions.clientVersion || 'latest') + "/WatsonAssistantChatEntry.js";
-            document.head.appendChild(t);
-          });
-        </script>
-        """
-        # Embed the script in the Streamlit app
-        components.html(watson_script, height=600)
-
-
-    def run(self):
-        st.sidebar.title("Navigation")
-        page = st.sidebar.radio("Select Page", ["New Analysis", "Previous Analyses"])
-        
-        if page == "New Analysis":
-            uploaded_file = st.file_uploader(
-                "Upload Financial Statement",
-                type=['pdf', 'csv', 'xlsx', 'xls']
-            )
-            
-            if uploaded_file:
-                temp_dir = Path("temp_uploads")
-                temp_dir.mkdir(exist_ok=True)
-                file_path = temp_dir / uploaded_file.name
-                
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.getvalue())
-                
-                with st.spinner("Analyzing financial data..."):
-                    try:
-                        results = self.scorer.analyze_financial_data(str(file_path))
-                        
-                        self.display_score_header(
-                            results['credit_score'],
-                            results['rating']
-                        )
-                        
-                        self.display_transaction_analysis(results['dataframe'])
-                        self.display_financial_summary(results['analysis'])
-                        self.display_risk_analysis(results['risk_factors'])
-                        self.display_detailed_analysis(results['analysis'])
-                        
-                        st.success("Analysis completed successfully!")
-                        
-                    except Exception as e:
-                        st.error(f"Error during analysis: {str(e)}")
-                    finally:
-                        file_path.unlink(missing_ok=True)
-        
+    def render_detailed_analysis(self, analysis):
+            """Render the detailed analysis section"""
+            st.header("📑 Detailed Analysis")
+            st.markdown(analysis)
+    
+    def main(self):
+        if st.session_state.page == 'upload':
+            self.upload_page()
         else:
-            st.markdown("### Previous Analyses")
-            prev_results = self.scorer.load_previous_analyses()
-            if prev_results:
-                self.display_score_header(
-                    prev_results['credit_score'],
-                    prev_results['rating']
-                )
-                
-                self.display_transaction_analysis(prev_results['dataframe'])
-                self.display_financial_summary(prev_results['analysis'])
-                self.display_risk_analysis(prev_results['risk_factors'])
-                self.display_detailed_analysis(prev_results['analysis'])
-                # self.display_ai_chat()
+            self.results_page()
 
-        self.display_ai_chat()
+def main():
+    app = CreditScoringUI()
+    app.main()
 
 if __name__ == "__main__":
-    dashboard = CreditScoringDashboard()
-    dashboard.run() 
-
-
-
+    main()
 
 
